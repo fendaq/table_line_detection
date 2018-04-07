@@ -606,7 +606,7 @@ def main():
         inputs_shape = tf.shape(inputs)
         input_resized = resize(inputs)
         # strides = tf.placeholder_with_default([32, 256], shape=[2], name='strides')
-        images, n1, n2 = extract_patches(input_resized, [1, 512, 512,1], [1,*strides,1])
+        images, n1, n2 = extract_patches(input_resized, [1, 256, 256,1], [1,*strides,1])
 
         batch_input = images / 255
         print('Batch input:', batch_input)
@@ -636,7 +636,7 @@ def main():
 
     examples = load_examples()
     print("examples count = %d" % examples.count)
-
+    examples.targets = tf.concat([examples.targets[:,:,1:2], examples.targets[:,:,1:3]], axis=-1)
     # inputs and targets are [batch_size, height, width, channels]
     model = create_model(examples.inputs, examples.targets)
 
