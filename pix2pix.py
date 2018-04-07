@@ -50,7 +50,7 @@ a = parser.parse_args()
 
 EPS = 1e-12
 CROP_SIZE = 512
-
+stride =[256, 256]
 Examples = collections.namedtuple("Examples", "paths, inputs, targets, count, steps_per_epoch")
 Model = collections.namedtuple("Model", "outputs, predict_real, predict_fake, discrim_loss, discrim_grads_and_vars, gen_loss_GAN, gen_loss_L1, gen_grads_and_vars, train")
 
@@ -567,45 +567,55 @@ def main():
 
     if a.mode == "export":
         # export the generator to a meta graph that can be imported later for standalone generation
-        if a.lab_colorization:
-            raise Exception("export not supported for lab_colorization")
+        assert a.strides is not None
+        def extract_patches(image, k_size, strides):
+            images = tf.extract_image_patches(tf.expand_dims(
+                image, 0), k_size, strides, rates=[1, 1, 1, 1], padding='SAME')[0]
+            images_shape = tf.shape(images)
+            images_reshape = tf.reshape(
+                images, [images_shape[0]*images_shape[1], *k_size[1:3], 3])
+            images, n1, n2 = tf.cast(images_reshape, tf.uint8) , images_shape[0], images_shape[1]
+            return images, n1, n2
 
-        input = tf.placeholder(tf.string, shape=[1])
-        input_data = tf.decode_base64(input[0])
-        input_image = tf.image.decode_png(input_data)
+        def join_patches(images, n1, n2, k_size, strides):
 
-        # remove alpha channel if present
-        input_image = tf.cond(tf.equal(tf.shape(input_image)[2], 4), lambda: input_image[:,:,:3], lambda: input_image)
-        # convert grayscale to RGB
-        input_image = tf.cond(tf.equal(tf.shape(input_image)[2], 1), lambda: tf.image.grayscale_to_rgb(input_image), lambda: input_image)
+            s1 = k_size[1]//2-strides[1]//2
+            s2 = k_size[2]//2-strides[2]//2
+            roi = images[:, 
+                        s1:s1+strides[1],\
+                        s2:s2+strides[2],
+                        :]
+            new_shape = [n1, n2, *roi.shape[1:]]
+            reshaped_roi = tf.reshape(roi, new_shape)
+            reshaped_roi = tf.transpose(reshaped_roi, perm=[0,2,1,3,4])
+            rs = tf.shape(reshaped_roi)
+            rv = tf.reshape(reshaped_roi, [rs[0]*rs[1], rs[2]*rs[3], -1])
+            return rv
 
-        input_image = tf.image.convert_image_dtype(input_image, dtype=tf.float32)
-        input_image.set_shape([CROP_SIZE, CROP_SIZE, 3])
-        batch_input = tf.expand_dims(input_image, axis=0)
+        def resize(image, new_size=None):
+            shape = tf.shape(image)
+            h, w = shape[0], shape[1]
+            if new_size is None:
+                new_h = tf.cast(tf.ceil(h/CROP_SIZE[0])*CROP_SIZE[0], tf.int32)
+                new_w = tf.cast(tf.ceil(w/CROP_SIZE[1])*CROP_SIZE[1], tf.int32)
+            else:
+                new_h, new_w = new_size
+            return tf.image.resize_bilinear(tf.expand_dims(image, 0), (new_h, new_w))[0]
+        # inputs = tf.placeholder(tf.float32, [None, *CROP_SIZE, 3], 'inputs')
+        inputs = tf.placeholder(tf.float32, [None, None, 3], 'inputs')
+        inputs_shape = tf.shape(inputs)
+        input_resized = resize(inputs)
+        # strides = tf.placeholder_with_default([32, 256], shape=[2], name='strides')
+        images, n1, n2 = extract_patches(input_resized, [1, 512, 512,1], [1,*strides,1])
 
+        batch_input = images / 255
+        print('Batch input:', batch_input)
         with tf.variable_scope("generator"):
-            batch_output = deprocess(create_generator(preprocess(batch_input), 3))
-
-        output_image = tf.image.convert_image_dtype(batch_output, dtype=tf.uint8)[0]
-        if a.output_filetype == "png":
-            output_data = tf.image.encode_png(output_image)
-        elif a.output_filetype == "jpeg":
-            output_data = tf.image.encode_jpeg(output_image, quality=80)
-        else:
-            raise Exception("invalid filetype")
-        output = tf.convert_to_tensor([tf.encode_base64(output_data)])
-
-        key = tf.placeholder(tf.string, shape=[1])
-        inputs = {
-            "key": key.name,
-            "input": input.name
-        }
-        tf.add_to_collection("inputs", json.dumps(inputs))
-        outputs = {
-            "key":  tf.identity(key).name,
-            "output": output.name,
-        }
-        tf.add_to_collection("outputs", json.dumps(outputs))
+            batch_output = deprocess(
+                create_generator(preprocess(batch_input), 3))
+        batch_output = join_patches(batch_output, n1, n2, [1, *CROP_SIZE,1], [1,*strides,1])
+        batch_output = resize(batch_output, [inputs_shape[0], inputs_shape[1]])
+        outputs = tf.identity(tf.cast(batch_output*255, tf.uint8), name='outputs')
 
         init_op = tf.global_variables_initializer()
         restore_saver = tf.train.Saver()
@@ -616,9 +626,11 @@ def main():
             print("loading model from checkpoint")
             checkpoint = tf.train.latest_checkpoint(a.checkpoint)
             restore_saver.restore(sess, checkpoint)
-            print("exporting model")
-            export_saver.export_meta_graph(filename=os.path.join(a.output_dir, "export.meta"))
-            export_saver.save(sess, os.path.join(a.output_dir, "export"), write_meta_graph=False)
+            print("exporting model:", checkpoint)
+            export_saver.export_meta_graph(
+                filename=os.path.join(a.output_dir, "export.meta"))
+            export_saver.save(sess, os.path.join(
+                a.output_dir, "export"), write_meta_graph=False)
 
         return
 
