@@ -1,0 +1,1 @@
+python pix2pix.py --input_dir data/croped_image --output_dir output/v2 --mode train --ndf 8 --ngf 16 --batch_size 4 --progress_freq 50 --save_freq 1000 

@@ -1,0 +1,1 @@
+CUDA_VISIBLE_DEVICES=-1 python pix2pix.py --mode export --checkpoint output/v1 --output_dir output/exported

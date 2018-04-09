@@ -25,7 +25,7 @@ parser.add_argument("--max_epochs", type=int, help="number of training epochs")
 parser.add_argument("--summary_freq", type=int, default=100, help="update summaries every summary_freq steps")
 parser.add_argument("--progress_freq", type=int, default=50, help="display progress every progress_freq steps")
 parser.add_argument("--trace_freq", type=int, default=0, help="trace execution every trace_freq steps")
-parser.add_argument("--display_freq", type=int, default=100, help="write current training images every display_freq steps")
+parser.add_argument("--display_freq", type=int, default=0, help="write current training images every display_freq steps")
 parser.add_argument("--save_freq", type=int, default=5000, help="save model every save_freq steps, 0 to disable")
 
 parser.add_argument("--separable_conv", action="store_true", help="use separable convolutions in the generator")
@@ -35,7 +35,7 @@ parser.add_argument("--batch_size", type=int, default=1, help="number of images 
 parser.add_argument("--which_direction", type=str, default="AtoB", choices=["AtoB", "BtoA"])
 parser.add_argument("--ngf", type=int, default=64, help="number of generator filters in first conv layer")
 parser.add_argument("--ndf", type=int, default=64, help="number of discriminator filters in first conv layer")
-parser.add_argument("--scale_size", type=int, default=512, help="scale images to this size before cropping to 256x256")
+parser.add_argument("--scale_size", type=int, default=286, help="scale images to this size before cropping to 256x256")
 parser.add_argument("--flip", dest="flip", action="store_true", help="flip images horizontally")
 parser.add_argument("--no_flip", dest="flip", action="store_false", help="don't flip images horizontally")
 parser.set_defaults(flip=True)
@@ -49,8 +49,9 @@ parser.add_argument("--output_filetype", default="png", choices=["png", "jpeg"])
 a = parser.parse_args()
 
 EPS = 1e-12
-CROP_SIZE = 512
-stride =[256, 256]
+CROP_SIZE = 256
+strides=[CROP_SIZE//2, CROP_SIZE//2]
+
 Examples = collections.namedtuple("Examples", "paths, inputs, targets, count, steps_per_epoch")
 Model = collections.namedtuple("Model", "outputs, predict_real, predict_fake, discrim_loss, discrim_grads_and_vars, gen_loss_GAN, gen_loss_L1, gen_grads_and_vars, train")
 
@@ -567,7 +568,6 @@ def main():
 
     if a.mode == "export":
         # export the generator to a meta graph that can be imported later for standalone generation
-        assert a.strides is not None
         def extract_patches(image, k_size, strides):
             images = tf.extract_image_patches(tf.expand_dims(
                 image, 0), k_size, strides, rates=[1, 1, 1, 1], padding='SAME')[0]
@@ -596,8 +596,8 @@ def main():
             shape = tf.shape(image)
             h, w = shape[0], shape[1]
             if new_size is None:
-                new_h = tf.cast(tf.ceil(h/CROP_SIZE[0])*CROP_SIZE[0], tf.int32)
-                new_w = tf.cast(tf.ceil(w/CROP_SIZE[1])*CROP_SIZE[1], tf.int32)
+                new_h = tf.cast(tf.ceil(h/CROP_SIZE)*CROP_SIZE, tf.int32)
+                new_w = tf.cast(tf.ceil(w/CROP_SIZE)*CROP_SIZE, tf.int32)
             else:
                 new_h, new_w = new_size
             return tf.image.resize_bilinear(tf.expand_dims(image, 0), (new_h, new_w))[0]
@@ -606,14 +606,14 @@ def main():
         inputs_shape = tf.shape(inputs)
         input_resized = resize(inputs)
         # strides = tf.placeholder_with_default([32, 256], shape=[2], name='strides')
-        images, n1, n2 = extract_patches(input_resized, [1, 256, 256,1], [1,*strides,1])
+        images, n1, n2 = extract_patches(input_resized, [1, CROP_SIZE, CROP_SIZE,1], [1,*strides,1])
 
         batch_input = images / 255
         print('Batch input:', batch_input)
         with tf.variable_scope("generator"):
             batch_output = deprocess(
                 create_generator(preprocess(batch_input), 3))
-        batch_output = join_patches(batch_output, n1, n2, [1, *CROP_SIZE,1], [1,*strides,1])
+        batch_output = join_patches(batch_output, n1, n2, [1, CROP_SIZE, CROP_SIZE,1], [1,*strides,1])
         batch_output = resize(batch_output, [inputs_shape[0], inputs_shape[1]])
         outputs = tf.identity(tf.cast(batch_output*255, tf.uint8), name='outputs')
 
@@ -633,10 +633,9 @@ def main():
                 a.output_dir, "export"), write_meta_graph=False)
 
         return
-
     examples = load_examples()
     print("examples count = %d" % examples.count)
-    examples.targets = tf.concat([examples.targets[:,:,1:2], examples.targets[:,:,1:3]], axis=-1)
+
     # inputs and targets are [batch_size, height, width, channels]
     model = create_model(examples.inputs, examples.targets)
 
